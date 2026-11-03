@@ -1,0 +1,37 @@
+# ============================================================================
+#  lab_ex3_osd_SC500_720P  ——  只保留源码，排除 TD 编译产物与调试输出
+# ============================================================================
+
+# ---- TD 编译产物（整个 td_project 默认排除，下面再放行必须的文件）----
+lab_ex3_osd/td_project/*
+# 放行：工程清单、时序约束、字模、IP 库
+!lab_ex3_osd/td_project/camera_to_dsi_display.al
+!lab_ex3_osd/td_project/camera_to_dsi_display.sdc
+!lab_ex3_osd/td_project/mif
+!lab_ex3_osd/td_project/al_ip
+
+# ---- 调试/评估输出（图片、渲染结果，19MB）----
+lab_ex3_osd/user_source/hdl_source/out_eval/
+
+# ---- 备份文件与历史快照目录（44 处）----
+*.bak
+*.bak_*
+*.bak[0-9]*
+*.lutbak
+*_backup*/
+_backup_*/
+_wip_*/
+
+# ---- Python / 系统临时文件 ----
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 编辑器 ----
+.vscode/
+.idea/
+*.swp
+*~

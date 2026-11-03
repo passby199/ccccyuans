@@ -1,0 +1,271 @@
+//=============================================================================
+// v7_class -- 单类流式检测状态机（三类各例化一份）
+//
+//  ★ 五级流水（每级 1 拍，全部落在行间/帧间的空闲拍里，不影响结果）
+//    A  sample 拍       : 行内 run 累加 / 段自然结束时结算 best
+//    B  row_end+1 拍    : 段延伸到行末 -> 结算 best
+//    C  row_end+2 拍    : 用 best 做 band 合并（重叠并 / 空行超限收）
+//    D  frame_end 拍    : 收当前 band -> 候选（取 core 最大）
+//    E  frame_end+1 拍  : 门限判定 + 帧间保持 + 输出
+//
+//  ★ 为什么必须拆流水（2026-10-29 实测）
+//    原来把 A~E 串成一个 always @(*) 组合链，综合出 32 级逻辑、16 个加法器，
+//    布局后 Setup WNS = -10.0ns（要求 13.333ns，实际 23.1ns，FMAX 42.8MHz）。
+//    布线器为修时序反复 rip-up/reroute，一次编译 50 分钟还不收敛。
+//    拆成五级后每级只有 1~2 个加法器，路径回到 5ns 以内。
+//
+//  ★ 位宽压缩（省资源）
+//    run_len/run_core/best_*  : 9 -> 8 位（最大 160 < 256）
+//    bcore/cand_core          : 14 -> 11 位【饱和】计数
+//        门限最大只要 K*MAX_W = 3*160 = 480，11 位能到 2047，余量 4 倍；
+//        超过 2047 一律饱和（真实场景一类只有一个目标，碰不到）。
+//        加法器/比较器从 14 位降到 11 位，720 个随机用例零差异。
+//    seg_hi 用 9 位算、取低 8 位（段右端必然 <= 159）
+//=============================================================================
+module v7_class #(
+    parameter [7:0] MIN_CORE = 8'd25,
+    parameter [7:0] MIN_W    = 8'd4,
+    parameter [7:0] MAX_W    = 8'd90,
+    parameter [6:0] MIN_H    = 7'd4,
+    parameter [6:0] MAX_H    = 7'd90,
+    parameter [3:0] DENS_K   = 4'd3,
+    parameter [3:0] GAPX     = 4'd4,
+    parameter [3:0] VGAP     = 4'd3,
+    parameter [7:0] PROJ_TH  = 8'd2,
+    parameter [7:0] HOLD_N   = 8'd30
+)(
+    input  wire        I_clk,
+    input  wire        I_rst_n,
+    input  wire        I_sample,        // 8x8 网格采样拍
+    input  wire        I_row_end_d1,    // 行末后 1 拍（非 sample 拍）
+    input  wire        I_row_end_d2,    // 行末后 2 拍（非 sample 拍）
+    input  wire        I_frame_end,     // 帧末拍
+    input  wire        I_frame_end_d1,  // 帧末后 1 拍
+    input  wire [7:0]  I_sx,            // 0..159
+    input  wire [6:0]  I_sy,            // 0..89（row_end_d2 拍仍是当前行）
+    input  wire        I_hit,           // 本格 halo 命中
+    input  wire        I_core,          // 本格 core 命中
+    input  wire [15:0] I_min_pix,       // P24 全局最小 core 数（有效 0~511）
+
+    output reg         O_valid,
+    output reg  [8:0]  O_x0, O_x1,
+    output reg  [7:0]  O_y0, O_y1,
+    output reg         O_pass,          // 本帧过门限（frame_end_d1 拍更新）
+    output reg  [10:0] O_gcore
+);
+
+    //=========================================================================
+    // A + B：行内最长连续段
+    //   A 段（sample 拍）：run 累加；不命中且 run 活跃 -> 结算 best
+    //   B 段（row_end+1 拍）：row_end 拍若仍命中，run 会累加到含 x=159 这一格，
+    //                        所以收段必须放到下一拍，此时 run_len 已稳定
+    //=========================================================================
+    reg        run_act;
+    reg [7:0]  run_x0;
+    reg [7:0]  run_len, run_core;
+    reg [7:0]  best_x;
+    reg [7:0]  best_len, best_core;
+
+    always @(posedge I_clk or negedge I_rst_n) begin
+        if (!I_rst_n) begin
+            run_act  <= 1'b0;
+            run_x0   <= 8'd0;
+            run_len  <= 8'd0;
+            run_core <= 8'd0;
+            best_x   <= 8'd0;
+            best_len <= 8'd0;
+            best_core<= 8'd0;
+        end
+        else if (I_sample) begin
+            if (I_hit) begin
+                if (!run_act) begin
+                    run_act  <= 1'b1;
+                    run_x0   <= I_sx;
+                    run_len  <= 8'd1;
+                    run_core <= {7'd0, I_core};
+                end
+                else begin
+                    run_len  <= run_len  + 8'd1;
+                    run_core <= run_core + {7'd0, I_core};
+                end
+            end
+            else if (run_act) begin
+                // 段自然结束：> 比较保持首个最大值（与 Python 的 max 一致）
+                run_act <= 1'b0;
+                if (run_len > best_len) begin
+                    best_len  <= run_len;
+                    best_x    <= run_x0;
+                    best_core <= run_core;
+                end
+            end
+        end
+        else if (I_row_end_d1 && run_act) begin
+            // 段延伸到行末，强制收段
+            run_act <= 1'b0;
+            if (run_len > best_len) begin
+                best_len  <= run_len;
+                best_x    <= run_x0;
+                best_core <= run_core;
+            end
+        end
+    end
+
+    //=========================================================================
+    // C + D + E：band 合并 / 帧末收 band / 门限输出
+    //   三个分支互斥（row_end_d2 在行内空档、frame_end 在帧末、frame_end_d1 在其后）
+    //   合成一个 always 块是因为 band_act / cand_* 被 C、D、E 共同写，
+    //   分开写会报多驱动；用 else if 保证综合器按并行 mux 实现（路径取 max）
+    //=========================================================================
+    reg        band_act;
+    reg [7:0]  bx0, bx1;
+    reg [6:0]  by0, by1;
+    reg [10:0] bcore;          // 11 位饱和计数
+    reg [6:0]  last_y;
+
+    reg        cand_valid;
+    reg [10:0] cand_core;      // 11 位饱和计数
+    reg [7:0]  cand_x0, cand_x1;
+    reg [6:0]  cand_y0, cand_y1;
+
+    reg [7:0]  miss;
+
+    // 段右端 = best_x + best_len - 1（9 位算，取低 8 位）
+    wire [8:0] seg_hi = {1'b0, best_x} + {1'b0, best_len} - 9'd1;
+    // 饱和加法：bcore + best_core，超过 2047 一律饱和
+    wire [11:0] bc_sum = {1'b0, bcore} + {1'b0, best_core};
+    wire [10:0] bc_new = bc_sum[11] ? 11'h7FF : bc_sum[10:0];
+
+    // 门限（组合，只在 frame_end_d1 拍采样）
+    //  ⚠ 3 倍必须写成「x + 2x」的加法，不能写 DENS_K * x：
+    //    4 位 x 9 位的乘法会被综合器推断成 DSP，三类各 2 个 = 6 个 DSP
+    //    （全设计只有 32 个，实测确实被吃掉了 6 个）。
+    //    写成加法后只用 9 位 ripple adder，判定结果完全一样。
+    wire [7:0] gw = cand_x1 - cand_x0 + 8'd1;
+    wire [7:0] gh = cand_y1 - cand_y0 + 8'd1;
+    wire [10:0] kw = {3'b0, gw} + {2'b0, gw, 1'b0};
+    wire [10:0] kh = {3'b0, gh} + {2'b0, gh, 1'b0};
+
+    wire gate_ok = cand_valid                          &&
+                   (cand_core >= {3'b0, MIN_CORE})     &&
+                   (cand_core >= I_min_pix[10:0])       &&
+                   (cand_core >= kw) && (cand_core >= kh) &&
+                   (gw >= MIN_W) && (gw <= MAX_W)      &&
+                   ({1'b0, gh} >= {1'b0, MIN_H}) && ({1'b0, gh} <= {1'b0, MAX_H});
+
+    always @(posedge I_clk or negedge I_rst_n) begin
+        if (!I_rst_n) begin
+            band_act   <= 1'b0;
+            bx0 <= 8'd0;  bx1 <= 8'd0;
+            by0 <= 7'd0;  by1 <= 7'd0;
+            bcore      <= 11'd0;
+            last_y     <= 7'd0;
+            cand_valid <= 1'b0;
+            cand_core  <= 11'd0;
+            cand_x0 <= 8'd0;  cand_x1 <= 8'd0;
+            cand_y0 <= 7'd0;  cand_y1 <= 7'd0;
+            miss       <= 8'd0;
+            O_valid    <= 1'b0;
+            O_x0 <= 9'd0;  O_x1 <= 9'd0;
+            O_y0 <= 8'd0;  O_y1 <= 8'd0;
+            O_pass  <= 1'b0;
+            O_gcore <= 11'd0;
+        end
+        //------------------------------------------------------------------
+        // C：band 合并（row_end+2 拍）
+        //------------------------------------------------------------------
+        else if (I_row_end_d2) begin
+            if (best_len >= PROJ_TH) begin
+                if (!band_act) begin
+                    // 开新 band
+                    band_act <= 1'b1;
+                    bx0 <= best_x;
+                    bx1 <= seg_hi[7:0];
+                    by0 <= I_sy;
+                    by1 <= I_sy;
+                    bcore <= {3'b0, best_core};
+                end
+                else if (({1'b0, best_x} <= ({1'b0, bx1} + {5'd0, GAPX})) &&
+                         ((seg_hi + {5'd0, GAPX}) >= {1'b0, bx0})) begin
+                    // 横向重叠 -> 并入
+                    if (best_x    < bx0) bx0 <= best_x;
+                    if (seg_hi[7:0] > bx1) bx1 <= seg_hi[7:0];
+                    by1   <= I_sy;
+                    bcore <= bc_new;
+                end
+                else begin
+                    // 不重叠 -> 收旧 band，开新 band
+                    if (bcore > 11'd0) begin
+                        if (!cand_valid || (bcore > cand_core)) begin
+                            cand_valid <= 1'b1;
+                            cand_core  <= bcore;
+                            cand_x0 <= bx0;  cand_x1 <= bx1;
+                            cand_y0 <= by0;  cand_y1 <= by1;
+                        end
+                    end
+                    band_act <= 1'b1;
+                    bx0 <= best_x;
+                    bx1 <= seg_hi[7:0];
+                    by0 <= I_sy;
+                    by1 <= I_sy;
+                    bcore <= {3'b0, best_core};
+                end
+                last_y <= I_sy;
+            end
+            else if (band_act && (({1'b0, I_sy} - {1'b0, last_y}) > {4'd0, VGAP})) begin
+                // 本行无有效段且空行超容忍 -> 收 band
+                if (bcore > 11'd0) begin
+                    if (!cand_valid || (bcore > cand_core)) begin
+                        cand_valid <= 1'b1;
+                        cand_core  <= bcore;
+                        cand_x0 <= bx0;  cand_x1 <= bx1;
+                        cand_y0 <= by0;  cand_y1 <= by1;
+                    end
+                end
+                band_act <= 1'b0;
+            end
+            // 清行内最长段
+            best_len  <= 8'd0;
+            best_x    <= 8'd0;
+            best_core <= 8'd0;
+        end
+        //------------------------------------------------------------------
+        // D：帧末收 band（frame_end 拍）
+        //------------------------------------------------------------------
+        else if (I_frame_end) begin
+            if (band_act && (bcore > 11'd0)) begin
+                if (!cand_valid || (bcore > cand_core)) begin
+                    cand_valid <= 1'b1;
+                    cand_core  <= bcore;
+                    cand_x0 <= bx0;  cand_x1 <= bx1;
+                    cand_y0 <= by0;  cand_y1 <= by1;
+                end
+            end
+            band_act <= 1'b0;
+        end
+        //------------------------------------------------------------------
+        // E：门限判定 + 帧间保持 + 输出（frame_end+1 拍）
+        //------------------------------------------------------------------
+        else if (I_frame_end_d1) begin
+            O_pass  <= gate_ok;
+            O_gcore <= cand_core;
+            if (gate_ok) begin
+                O_valid <= 1'b1;
+                O_x0 <= {1'b0, cand_x0};
+                O_x1 <= {1'b0, cand_x1};
+                O_y0 <= {1'b0, cand_y0};
+                O_y1 <= {1'b0, cand_y1};
+                miss <= 8'd0;
+            end
+            else if (miss < HOLD_N) begin
+                miss <= miss + 8'd1;
+            end
+            else begin
+                O_valid <= 1'b0;
+            end
+            // 清帧级候选
+            cand_valid <= 1'b0;
+            cand_core  <= 11'd0;
+        end
+    end
+
+endmodule

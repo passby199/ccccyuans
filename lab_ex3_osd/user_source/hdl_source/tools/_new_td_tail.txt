@@ -1,0 +1,115 @@
+    //-------------------------------------------------------------------------
+    // 3. 流水控制脉冲（三类共享，省寄存器）
+    //
+    //    row_end 落在 s_x=159 那个 sample 拍（x_cnt=1272）。之后 x_cnt=1273~1279
+    //    都不是 8 的倍数（不是 sample 拍），再到下一行 x=0 才重新采样 ——
+    //    中间有 7 拍空档。所以可以把「收段」和「band 合并」分别推到后两拍做，
+    //    把一条 32 级、16 个加法器的超长组合链拆成三级流水。
+    //
+    //    帧末同理：frame_end 在 x_cnt=1279，下一拍就是新帧第一格，
+    //    「收 band」和「门限判定」分两拍做，不影响结果。
+    //-------------------------------------------------------------------------
+    reg row_end_d1, row_end_d2;
+    reg frame_end_d1, frame_end_d2;
+
+    always @(posedge I_clk or negedge I_rst_n) begin
+        if (!I_rst_n) begin
+            row_end_d1   <= 1'b0;
+            row_end_d2   <= 1'b0;
+            frame_end_d1 <= 1'b0;
+            frame_end_d2 <= 1'b0;
+        end
+        else begin
+            row_end_d1   <= row_end;
+            row_end_d2   <= row_end_d1;
+            frame_end_d1 <= frame_end;
+            frame_end_d2 <= frame_end_d1;
+        end
+    end
+
+    //-------------------------------------------------------------------------
+    // 4. 三类并行流式状态机
+    //-------------------------------------------------------------------------
+    wire        o_pass, y_pass, d_pass;
+    wire [10:0] o_gcore, y_gcore, d_gcore;
+
+    v7_class #(
+        .MIN_CORE ( ORANGE_MIN_CORE ), .MIN_W ( ORANGE_MIN_W ),
+        .MAX_W    ( ORANGE_MAX_W    ), .MIN_H ( ORANGE_MIN_H ),
+        .MAX_H    ( ORANGE_MAX_H    ), .DENS_K( DENS_K ),
+        .GAPX     ( GAPX ), .VGAP ( VGAP ),
+        .PROJ_TH  ( PROJ_TH ), .HOLD_N( HOLD_N )
+    ) u_cls_orange (
+        .I_clk( I_clk ), .I_rst_n( I_rst_n ),
+        .I_sample( sample ),
+        .I_row_end_d1( row_end_d1 ), .I_row_end_d2( row_end_d2 ),
+        .I_frame_end( frame_end ), .I_frame_end_d1( frame_end_d1 ),
+        .I_sx( s_x ), .I_sy( s_y ),
+        .I_hit( o_hit ), .I_core( o_core ), .I_min_pix( I_min_pix ),
+        .O_valid( O_orange_valid ),
+        .O_x0( O_orange_x0 ), .O_x1( O_orange_x1 ),
+        .O_y0( O_orange_y0 ), .O_y1( O_orange_y1 ),
+        .O_pass( o_pass ), .O_gcore( o_gcore )
+    );
+
+    v7_class #(
+        .MIN_CORE ( VIVID_MIN_CORE ), .MIN_W ( VIVID_MIN_W ),
+        .MAX_W    ( VIVID_MAX_W    ), .MIN_H ( VIVID_MIN_H ),
+        .MAX_H    ( VIVID_MAX_H    ), .DENS_K( DENS_K ),
+        .GAPX     ( GAPX ), .VGAP ( VGAP ),
+        .PROJ_TH  ( PROJ_TH ), .HOLD_N( HOLD_N )
+    ) u_cls_vivid (
+        .I_clk( I_clk ), .I_rst_n( I_rst_n ),
+        .I_sample( sample ),
+        .I_row_end_d1( row_end_d1 ), .I_row_end_d2( row_end_d2 ),
+        .I_frame_end( frame_end ), .I_frame_end_d1( frame_end_d1 ),
+        .I_sx( s_x ), .I_sy( s_y ),
+        .I_hit( y_hit ), .I_core( y_core ), .I_min_pix( I_min_pix ),
+        .O_valid( O_vivid_valid ),
+        .O_x0( O_vivid_x0 ), .O_x1( O_vivid_x1 ),
+        .O_y0( O_vivid_y0 ), .O_y1( O_vivid_y1 ),
+        .O_pass( y_pass ), .O_gcore( y_gcore )
+    );
+
+    v7_class #(
+        .MIN_CORE ( DARK_MIN_CORE ), .MIN_W ( DARK_MIN_W ),
+        .MAX_W    ( DARK_MAX_W    ), .MIN_H ( DARK_MIN_H ),
+        .MAX_H    ( DARK_MAX_H    ), .DENS_K( DENS_K ),
+        .GAPX     ( GAPX ), .VGAP ( VGAP ),
+        .PROJ_TH  ( PROJ_TH ), .HOLD_N( HOLD_N )
+    ) u_cls_dark (
+        .I_clk( I_clk ), .I_rst_n( I_rst_n ),
+        .I_sample( sample ),
+        .I_row_end_d1( row_end_d1 ), .I_row_end_d2( row_end_d2 ),
+        .I_frame_end( frame_end ), .I_frame_end_d1( frame_end_d1 ),
+        .I_sx( s_x ), .I_sy( s_y ),
+        .I_hit( d_hit ), .I_core( d_core ), .I_min_pix( I_min_pix ),
+        .O_valid( O_dark_valid ),
+        .O_x0( O_dark_x0 ), .O_x1( O_dark_x1 ),
+        .O_y0( O_dark_y0 ), .O_y1( O_dark_y1 ),
+        .O_pass( d_pass ), .O_gcore( d_gcore )
+    );
+
+    //-------------------------------------------------------------------------
+    // 5. 胜者类别（本帧过门限的三类里，core 最多的那个）
+    //    都不过门限则保持上一帧的选择
+    //    frame_end_d2 = frame_end+2 拍，此时三类 O_pass/O_gcore 已稳定
+    //-------------------------------------------------------------------------
+    always @(posedge I_clk or negedge I_rst_n) begin
+        if (!I_rst_n) O_win_class <= 2'd0;
+        else if (frame_end_d2) begin
+            if (o_pass && y_pass && d_pass) begin
+                if ((o_gcore >= y_gcore) && (o_gcore >= d_gcore)) O_win_class <= 2'd0;
+                else if (y_gcore >= d_gcore)                      O_win_class <= 2'd1;
+                else                                              O_win_class <= 2'd2;
+            end
+            else if (o_pass && y_pass) O_win_class <= (o_gcore >= y_gcore) ? 2'd0 : 2'd1;
+            else if (o_pass && d_pass) O_win_class <= (o_gcore >= d_gcore) ? 2'd0 : 2'd2;
+            else if (y_pass && d_pass) O_win_class <= (y_gcore >= d_gcore) ? 2'd1 : 2'd2;
+            else if (o_pass)           O_win_class <= 2'd0;
+            else if (y_pass)           O_win_class <= 2'd1;
+            else if (d_pass)           O_win_class <= 2'd2;
+        end
+    end
+
+endmodule

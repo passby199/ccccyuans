@@ -1,0 +1,96 @@
+
+set_pin_assignment	{ I_sys_clk }			{ LOCATION = C4; IOSTANDARD  = LVCMOS33; PULLTYPE = PULLUP; }
+set_pin_assignment	{ I_rst_n }				{ LOCATION = R10; IOSTANDARD = LVCMOS33; PULLTYPE = PULLUP; }
+
+set_pin_assignment	{ O_cam_scl }		{ LOCATION = K3; IOSTANDARD  = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = PULLUP; }
+set_pin_assignment	{ IO_cam_sda }		{ LOCATION = J3; IOSTANDARD  = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = PULLUP; }
+set_pin_assignment	{ O_cam_24m }	{ LOCATION = L3; IOSTANDARD  = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = PULLUP; }
+set_pin_assignment	{ O_cam_rst }		{ LOCATION = L2; IOSTANDARD  = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = PULLUP; }
+
+# On-board user keys KEY1~KEY4 (BANK42, 10K pull-up to VCC_3V3, press = GND, active low)
+#   KEY1 = D5 (IO_TE8N_42)   KEY2 = A9 (IO_TE9P_42)
+#   KEY3 = B9 (IO_TE9N_42)   KEY4 = C7 (IO_TE10P_42)
+# Source: board manual table 2-24 + schematic HX1P35B_FT_40P_3.pdf (P01_FPGA_2) BANK42
+# NOTE: the original N2 / J14 were NOT keys -- they are 40-pin GPIO header pins
+#   (N2 = GPIOA_21 on J2 pin24, J14 = GPIOA_12 on J1 pin15), nothing connected.
+#   That is why pressing the board keys did nothing.
+# NOTE: comment char in an .adc file must be '#'.  Do NOT use C-style slash comments here.
+set_pin_assignment	{ I_button[0] }			{ LOCATION = D5;  IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = PULLUP; }
+set_pin_assignment	{ I_button[1] }			{ LOCATION = A9;  IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = PULLUP; }
+set_pin_assignment	{ I_button[2] }			{ LOCATION = B9;  IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = PULLUP; }
+set_pin_assignment	{ I_button[3] }			{ LOCATION = C7;  IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = PULLUP; }
+
+# ★★★ 2026-10-27 22:25：串口改用【例程验证可用的引脚 C18 / D15】★★★
+#
+#   依据：D:/ANLU/anlogic_example/chuankou/lab_ex1_mipi_hdmi 的 pin.adc
+#         （用户实测这套引脚 + 外接 USB-TTL 模块可用）
+#
+#   ★★ 注意是 J2 排针，不是 J1！两个 40 芯扩展口都叫 J1/J2，极易搞混 ★★
+#      J2 第 1 脚 = GPIOB_0 = C18  -> FPGA 发送(TX)，接 USB-TTL 模块的 RXD
+#      J2 第 2 脚 = GPIOB_1 = D15  -> FPGA 接收(RX)，接 USB-TTL 模块的 TXD
+#
+#   接线（3 根，缺一不可）：
+#      USB-TTL 模块 RXD -> J2 第 1 脚 (C18)
+#      USB-TTL 模块 TXD -> J2 第 2 脚 (D15)
+#      USB-TTL 模块 GND -> 板子 GND（必须共地）
+#      模块 VCC 不要接（板子自己供电）；电平跳线必须选 3.3V
+#
+#   ★ 关于板载 Type-C USB 转 UART（H1/J1）
+#     手册 P12 和引脚汇总都写 RXD=J1 / TXD=H1，但那是 BGA 球号，
+#     和 40 芯排针的 "J1" 同名毫无关系，极容易混淆。
+#     板载方案实测没通（TX 通、RX 不通），先不用；下面留作备选。
+#
+set_pin_assignment	{ O_uart_tx }			{ LOCATION = C18; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = PULLUP; }
+set_pin_assignment	{ I_uart_rx }			{ LOCATION = D15; IOSTANDARD = LVCMOS33; PULLTYPE = PULLUP; }
+#
+# 备选方案 A：板载 Type-C USB 转 UART（BGA 球号 H1/J1，非排针）
+# set_pin_assignment	{ O_uart_tx }			{ LOCATION = H1; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = PULLUP; }
+# set_pin_assignment	{ I_uart_rx }			{ LOCATION = J1; IOSTANDARD = LVCMOS33; PULLTYPE = PULLUP; }
+#
+# 备选方案 B：J2 排针第 24 脚（N2 = IO_BE10N_21）
+# set_pin_assignment	{ I_uart_rx }			{ LOCATION = N2; IOSTANDARD = LVCMOS33; PULLTYPE = PULLUP; }
+
+# On-board LEDs (BANK42). 2026-10-26 新增：档位指示
+#   LED1 = D10  第11档(动漫画)      LED2 = E10  第5档(二值化)
+#   LED3 = C6   第12档(边缘提取)    LED4 = D6   串口收到命令闪 0.5s
+#   高电平点亮（与 2_Example/1_breath_led 一致）
+set_pin_assignment	{ O_led[0] }			{ LOCATION = D10; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = NONE; }
+set_pin_assignment	{ O_led[1] }			{ LOCATION = E10; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = NONE; }
+set_pin_assignment	{ O_led[2] }			{ LOCATION = C6;  IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = NONE; }
+set_pin_assignment	{ O_led[3] }			{ LOCATION = D6;  IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = NONE; }
+
+# DIP switch SW1 (A4 = IO_TE12P_42, BANK42). Used to clear the jump counter.
+#   The switch ties the pin to either VCC_3V3 or GND (no external resistor),
+#   PULLDOWN keeps it at 0 when the switch is open/floating.
+#   If it behaves inverted on your board, change PULLDOWN to PULLUP
+#   (or invert I_sw_clear in design_top_wrapper.v).
+#   NOTE: pure input pins must NOT carry DRIVESTRENGTH -- TD rejects it with
+#         "DRIVESTRENGTH is not supported by HDIO.LVCMOS33 in INPUT direction".
+#         (I_button uses it because those ports are declared inout.)
+set_pin_assignment	{ I_sw_clear }			{ LOCATION = A4; IOSTANDARD = LVCMOS33; PULLTYPE = PULLDOWN; }
+
+# DIP switches SW2 (B4) / SW3 (E11). Select the motion-detection threshold online:
+#   00 -> DIFF_TH=10 (default)  01 -> 6   10 -> 16   11 -> 24 (original)
+#   See the comment in design_top_wrapper.v for how to tune it.
+set_pin_assignment	{ I_sw_diag }			{ LOCATION = B4;  IOSTANDARD = LVCMOS33; PULLTYPE = PULLDOWN; }
+set_pin_assignment	{ I_sw_aux }			{ LOCATION = E11; IOSTANDARD = LVCMOS33; PULLTYPE = PULLDOWN; }
+
+# DIP switch SW4 (D11). Bounding-box style:
+#   0 (default) -> per-row contour (tight to the body, with jagged edges)
+#   1           -> whole bounding rectangle (old behaviour, for comparison)
+set_pin_assignment	{ I_sw_contour }		{ LOCATION = D11; IOSTANDARD = LVCMOS33; PULLTYPE = PULLDOWN; }
+
+set_pin_assignment	{ O_screen_pwm } 		{ LOCATION = R11; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = PULLDOWN; }
+
+# 一维舵机 PWM（2026-10-23 新增）
+#   E12 = GPIOB_2，位于 J2 排针第 3 脚（《HX1P35B开发板引脚分配汇总》表 2）
+#   50Hz / 0.5~2.5ms，驱动 SG90 / MG995 等 hobby 舵机
+#   ⚠ 舵机电源必须独立（4.8~6V / 2A），并从本板 J2 的 GND 共地
+#     绝对不能从 J2 的 VCC5V 取电 —— 舵机堵转 1.5~3A 会把板子拉复位
+set_pin_assignment	{ O_servo_pwm } 	{ LOCATION = E12; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = PULLDOWN; }
+set_pin_assignment	{ O_tmds_ch0_p }		{ LOCATION = G16; IOSTANDARD = TMDS33; PULLTYPE = NONE; }
+set_pin_assignment	{ O_tmds_ch1_p }		{ LOCATION = F17; IOSTANDARD = TMDS33; PULLTYPE = NONE; }
+set_pin_assignment	{ O_tmds_ch2_p }		{ LOCATION = H14; IOSTANDARD = TMDS33; PULLTYPE = NONE; }
+set_pin_assignment	{ O_tmds_clk_p }		{ LOCATION = C17; IOSTANDARD = TMDS33; PULLTYPE = NONE; }
+
+
